@@ -1,0 +1,15 @@
+{
+    "CtrlLeft":       "WordLeft",
+    "CtrlRight":      "WordRight",
+    "CtrlShiftLeft":  "SelectWordLeft",
+    "CtrlShiftRight": "SelectWordRight",
+    "OldBackspace":   "DeleteWordLeft",
+    "CtrlDelete":     "DeleteWordRight",
+    "AltDelete":      "DeleteWordRight",
+    "\u001b[3;3~":      "DeleteWordRight",
+    "\u001b[3;5~":      "DeleteWordRight",
+    "ShiftPageUp":      "SelectPageUp",
+    "ShiftPageDown":    "SelectPageDown",
+    "\u001b[5;2~": "SelectPageUp",
+    "\u001b[6;2~": "SelectPageDown"
+}
