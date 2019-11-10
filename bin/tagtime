@@ -1,0 +1,303 @@
+#!/usr/bin/env python
+
+import sys
+import time
+import random
+import Tkinter
+import sqlite3
+import platform
+import requests
+import subprocess
+import setproctitle
+
+
+GAP = 45 * 60
+SLEEP_INTERVAL = 10
+ANALYSIS_DAYS = 14
+OBSERVATION_DAYS = [0, 1, 2, 3] #, 4]
+OBSERVATION_HOUR_RANGES = [(9, 18)]
+
+AUTH_TOKEN = "redacted"
+POST_ANALYSIS = False
+TAGS_TO_GOALS = {'work': 'workmore'}
+DATAPOINT_URL = ("https://www.beeminder.com/api/v1/users/jtolds"
+                 "/goals/{goal}/datapoints.json?"
+                 "auth_token=" + AUTH_TOKEN + "&timestamp={timestamp}&"
+                 "value={value}&request_id={request_id}")
+
+
+_SCHEMA = """
+create table if not exists observations(tag text, timestamp integer);
+"""
+_proc_title_base = ""
+
+
+def now():
+    return int(time.time() * 1000000)
+
+
+def set_base_title(name):
+    global _proc_title_base
+    _proc_title_base = name
+
+
+def set_title(tag):
+    setproctitle.setproctitle(_proc_title_base + " [%s]" % tag)
+
+
+class TagTimeFrontend(object):
+
+    @staticmethod
+    def _parseTagString(tag_string, invalid_tag_cb=None):
+        tag_string = tag_string.strip()
+        if not tag_string:
+            return set()
+        tags = set(tag_string.split())
+        for tag in tags:
+            for char in tag:
+                if not (char.isalnum() or char in ("-", "_")):
+                    if invalid_tag_cb is not None:
+                        invalid_tag_cb()
+                    return set()
+        return tags
+
+    def askForTags(self, tags):
+        raise NotImplementedError()
+
+
+class ZenityFrontend(TagTimeFrontend):
+
+    def _findMoreTags(self):
+        try:
+            result = subprocess.check_output([
+                    "zenity", "--entry", "--title=TagTime", "--text",
+                    "Enter some space-separated tags:"]).strip()
+        except Exception:
+            return set()
+        return self._parseTagString(
+                result,
+                lambda: subprocess.call(
+                        ["zenity", "--warning", "--title=TagTime", "--text",
+                         "Invalid tag!"]))
+
+    def askForTags(self, tags):
+        while True:
+            command = ["zenity", "--list", "--checklist", "--text",
+                       "What are you doing right now?",  "--title=TagTime",
+                       "--column=boxes", "--column=tag", "--hide-header"]
+            for tag in tags:
+                if tag == "New Tag":
+                    continue
+                command.extend(["FALSE", tag])
+            command.extend(["FALSE", "New Tag"])
+            try:
+                results = subprocess.check_output(command).strip()
+            except Exception:
+                continue
+            if not results:
+                continue
+            results = set(results.split("|"))
+            if "New Tag" in results:
+                results.discard("New Tag")
+                results.update(self._findMoreTags())
+            if results:
+                return results
+
+
+class TkinterFrontend(TagTimeFrontend):
+
+    def askForTags(self, tags):
+        while True:
+            app = Tkinter.Tk()
+            app.resizable(False, False)
+            app.title("TagTime")
+
+            root_frame = Tkinter.Frame(app)
+            content_frame = Tkinter.Frame(root_frame, relief=Tkinter.RAISED,
+                    borderwidth=1)
+            content_frame.pack(fill=Tkinter.BOTH, expand=1)
+            root_frame.pack(fill=Tkinter.BOTH, expand=1)
+
+            Tkinter.Label(content_frame,
+                          text="What are you doing right now?").grid(
+                    row=0, sticky=Tkinter.W)
+            tag_state = {}
+            for row, tag in enumerate(tags):
+                tag_state[tag] = Tkinter.IntVar()
+                Tkinter.Checkbutton(
+                        content_frame, text=tag, variable=tag_state[tag]).grid(
+                            row=(row + 1), sticky=Tkinter.W)
+            if tags:
+                text = "Or enter space-separated tags:"
+            else:
+                text = "Enter space-separated tags:"
+            Tkinter.Label(content_frame, text=text).grid(
+                    row=(len(tags) + 1), sticky=Tkinter.W)
+            new_tags = Tkinter.StringVar()
+            Tkinter.Entry(content_frame, textvariable=new_tags).grid(
+                    row=(len(tags) + 2), sticky=Tkinter.W)
+            Tkinter.Button(root_frame, text="OK", command=app.destroy).pack(
+                    side=Tkinter.RIGHT)
+            app.mainloop()
+            result = set()
+            for tag in tag_state:
+                if tag_state[tag].get():
+                    result.add(tag)
+            result.update(self._parseTagString(new_tags.get()))
+            if result:
+                return result
+
+
+class Data(object):
+
+    def __init__(self, path):
+        self.path = path
+        db = sqlite3.connect(path)
+        db.executescript(_SCHEMA)
+        db.commit()
+        db.close()
+
+    def savedTags(self):
+        db = sqlite3.connect(self.path)
+        cur = db.cursor()
+        cur.execute("select tag, count(*) as times from observations "
+                    "group by tag order by times desc")
+        tags = []
+        for row in cur.fetchall():
+            tags.append(row[0])
+        db.close()
+        return tags
+
+    def observe(self, timestamp, tag):
+        db = sqlite3.connect(self.path)
+        db.execute("insert into observations (tag, timestamp) values (?, ?)",
+                   (tag, timestamp))
+        db.commit()
+        db.close()
+
+    def totalObservationCount(self, since_timestamp=0):
+        db = sqlite3.connect(self.path)
+        cur = db.cursor()
+        cur.execute("select count(distinct timestamp) from observations "
+                    "where timestamp >= ?;", (since_timestamp,))
+        count = long(cur.fetchone()[0])
+        cur.close()
+        db.close()
+        return count
+
+    def observationCountByTag(self, since_timestamp=0):
+        db = sqlite3.connect(self.path)
+        cur = db.cursor()
+        cur.execute("select tag, count(*) from observations where "
+                    "timestamp >= ? group by tag;", (since_timestamp,))
+        result = {}
+        for row in cur.fetchall():
+            result[row[0]] = int(row[1])
+        cur.close()
+        db.close()
+        return result
+
+
+def human_readable_interval(secs):
+    hours = 0
+    minutes = 0
+    while secs >= 3600:
+        hours += 1
+        secs -= 3600
+    while secs >= 60:
+        minutes += 1
+        secs -= 60
+    return "%dh%dm%ds" % (hours, minutes, secs)
+
+
+def postAnalysis(data):
+    if not POST_ANALYSIS:
+        return
+    cur_time = now()
+    since_timestamp = cur_time - (ANALYSIS_DAYS * 24 * 60 * 60 * 1000000)
+    total = float(data.totalObservationCount(since_timestamp=since_timestamp))
+    observation_counts = data.observationCountByTag(
+            since_timestamp=since_timestamp)
+    for tag, goal in TAGS_TO_GOALS.iteritems():
+        percent = observation_counts.get(tag, 0) * 100 / total
+        requests.post(DATAPOINT_URL.format(
+                goal=goal,
+                timestamp=(cur_time / 1000000),
+                value=percent, request_id=cur_time))
+
+
+def runLoop(path):
+    data = Data(path)
+    if platform.system() == "Linux":
+        frontend = ZenityFrontend()
+    else:
+        frontend = TkinterFrontend()
+
+    while True:
+        set_title("sleeping")
+        time_to_sleep = max(random.expovariate(1.0 / GAP), 1.0)
+        time_to_sleep_intervals = int(time_to_sleep / SLEEP_INTERVAL)
+        time_to_sleep_remainder = max(
+            time_to_sleep - SLEEP_INTERVAL * time_to_sleep_intervals, 0)
+        for i in xrange(time_to_sleep_intervals):
+            time.sleep(SLEEP_INTERVAL)
+            set_title("slept %s" % human_readable_interval(
+                    (i + 1) * SLEEP_INTERVAL))
+        set_title("observing")
+        current_timestamp = time.localtime()
+        # is the current hour allowed?
+        valid = not OBSERVATION_HOUR_RANGES
+        for hour_range in OBSERVATION_HOUR_RANGES:
+            if hour_range[0] <= current_timestamp.tm_hour <= hour_range[1]:
+                valid = True
+                break
+        if not valid:
+            continue
+        # is the current day allowed?
+        valid = not OBSERVATION_DAYS
+        for day in OBSERVATION_DAYS:
+            if day == current_timestamp.tm_wday:
+                valid = True
+                break
+        if not valid:
+            continue
+        # okay go for it
+        timestamp = now()
+        for tag in frontend.askForTags(data.savedTags()):
+            data.observe(timestamp, tag)
+        postAnalysis(data)
+
+def analyze(db_path):
+    data = Data(db_path)
+    since_timestamp = now() - (ANALYSIS_DAYS * 24 * 60 * 60 * 1000000)
+    total = float(data.totalObservationCount(since_timestamp=since_timestamp))
+    results = []
+    for key, count in data.observationCountByTag(
+            since_timestamp=since_timestamp).iteritems():
+        results.append((int(count * 100 / total), key))
+    results.sort(reverse=True)
+    for percent, key in results:
+        print key, percent
+
+
+def main():
+    try:
+        mode = sys.argv[1]
+        if mode not in ("observe", "analyze"):
+            raise Exception("bad mode")
+        db_path = sys.argv[2]
+    except Exception:
+        print "Usage: %s <observe/analyze> <database.sqlite>" % sys.argv[0]
+        sys.exit(1)
+
+    if mode == "observe":
+        set_base_title(" ".join(sys.argv))
+        set_title("starting")
+        return runLoop(db_path)
+
+    elif mode == "analyze":
+        return analyze(db_path)
+
+
+if __name__ == "__main__":
+    main()

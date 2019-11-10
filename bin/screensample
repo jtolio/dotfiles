@@ -1,0 +1,99 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import time
+import random
+import subprocess
+import setproctitle
+
+
+GAP = 2 * 60
+SLEEP_INTERVAL = 10
+OBSERVATION_DAYS = [0, 1, 2, 3] #, 4]
+OBSERVATION_HOUR_RANGES = [(9, 18)]
+
+
+_proc_title_base = ""
+
+
+def set_base_title(name):
+    global _proc_title_base
+    _proc_title_base = name
+
+
+def set_title(tag):
+    setproctitle.setproctitle(_proc_title_base + " [%s]" % tag)
+
+
+def screenshot(path):
+    subprocess.check_call([
+        "scrot", "-m", "-z", "-q", "25", "-e", "mv $f %s" % path,
+        "%F_%H-%M-%S_$wx$h.png"])
+    name = subprocess.check_output([
+        "scrot", "-u", "-m", "-z", "-q", "25", "-e",
+        "mv $f %s && echo $f" % path, "%F_%H-%M-%S_$wx$h_focused.png"]).strip()
+    window = subprocess.check_output(["active-window-name"])
+    with file(os.path.join(path, "%s.txt" % name[:-4]), "w") as fh:
+        fh.write(window)
+
+
+def human_readable_interval(secs):
+    hours = 0
+    minutes = 0
+    while secs >= 3600:
+        hours += 1
+        secs -= 3600
+    while secs >= 60:
+        minutes += 1
+        secs -= 60
+    return "%dh%dm%ds" % (hours, minutes, secs)
+
+
+def runLoop(path):
+    while True:
+        set_title("sleeping")
+        time_to_sleep = max(random.expovariate(1.0 / GAP), 1.0)
+        time_to_sleep_intervals = int(time_to_sleep / SLEEP_INTERVAL)
+        time_to_sleep_remainder = max(
+            time_to_sleep - SLEEP_INTERVAL * time_to_sleep_intervals, 0)
+        for i in xrange(time_to_sleep_intervals):
+            time.sleep(SLEEP_INTERVAL)
+            set_title("slept %s" % human_readable_interval(
+                    (i + 1) * SLEEP_INTERVAL))
+        set_title("observing")
+        current_timestamp = time.localtime()
+        # is the current hour allowed?
+        valid = not OBSERVATION_HOUR_RANGES
+        for hour_range in OBSERVATION_HOUR_RANGES:
+            if hour_range[0] <= current_timestamp.tm_hour <= hour_range[1]:
+                valid = True
+                break
+        if not valid:
+            continue
+        # is the current day allowed?
+        valid = not OBSERVATION_DAYS
+        for day in OBSERVATION_DAYS:
+            if day == current_timestamp.tm_wday:
+                valid = True
+                break
+        if not valid:
+            continue
+        # okay go for it
+        screenshot(path)
+
+
+def main():
+    try:
+        folder_path = sys.argv[1]
+    except Exception:
+        print "Usage: %s <screenshot folder>" % sys.argv[0]
+        sys.exit(1)
+
+    set_base_title(" ".join(sys.argv))
+    set_title("starting")
+    return runLoop(folder_path)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,56 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import time
+import signal
+
+QUANTUM = 0.01
+
+
+class Slowdown(object):
+
+    def __init__(self, pid):
+        self.paused = False
+        self.pid = pid
+
+    def pause(self):
+        if self.paused:
+            return
+        self.paused = True
+        os.kill(self.pid, signal.SIGSTOP)
+
+    def unpause(self):
+        if not self.paused:
+            return
+        self.paused = False
+        os.kill(self.pid, signal.SIGCONT)
+
+    def run(self, multiplier=1):
+        try:
+            while True:
+                self.pause()
+                time.sleep(QUANTUM * multiplier)
+                self.unpause()
+                time.sleep(QUANTUM)
+        finally:
+            self.unpause()
+
+
+def main():
+    try:
+        assert len(sys.argv) in (2, 3)
+        pid = int(sys.argv[1])
+        if len(sys.argv) == 3:
+            multiplier = int(sys.argv[2])
+        else:
+            multiplier = None
+    except:
+        print "usage: %s <pid> [slowdown multiplier (default 1)]" % sys.argv[0]
+        print "will run process pid with multiplier cycles sleeping for " \
+              "every cycle running"
+        sys.exit(1)
+    Slowdown(pid).run(multiplier)
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,18 @@
+#!/bin/bash
+
+pids=$(pidof python)
+
+cmdfile="$(mktemp tmp.XXXXX)"
+
+( tee "$cmdfile" <<'EOF'
+call PyGILState_Ensure()
+call PyRun_SimpleString("import os, sys, traceback\ncode = []\nfor threadId, stack in sys._current_frames().items():\n    code.append('\\n# ThreadID: %s' % threadId)\n    for filename, lineno, name, line in traceback.extract_stack(stack):\n        code.append('File: \\'%s\\', line %d, in %s' % (filename, lineno, name))\n        if line:\n            code.append('  %s' % (line.strip()))\nprint >>file('/tmp/dump-stacks-%d' % os.getpid(), 'w'), '\\n'.join(code)")
+call PyGILState_Release($1)
+EOF
+) > /dev/null
+
+for pid in $pids; do
+    sudo gdb "$(which python)" -p $pid -batch -x "$cmdfile"
+done
+
+rm "$cmdfile"

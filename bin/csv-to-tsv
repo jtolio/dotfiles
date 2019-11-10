@@ -1,0 +1,16 @@
+#!/usr/bin/env python2
+
+import csv, sys
+
+def clean(x):
+  x = str(x)
+  x = x.replace("\t", "        ")
+  x = x.replace("\n", " ")
+  return x
+
+reader = csv.reader(sys.stdin)
+for row in reader:
+  try:
+    print "\t".join(map(clean, row))
+  except:
+    break

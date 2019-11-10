@@ -1,0 +1,5 @@
+#!/usr/bin/python
+
+import random
+
+print random.choice("abcdef0123456789")
