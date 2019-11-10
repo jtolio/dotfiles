@@ -1,0 +1,18 @@
+[user]
+	email = hello@jtolio.com
+	name = JT Olio
+[url "git@github.com:"]
+	insteadOf = https://github.com/
+
+[alias]
+    kill-whitespace = "!bash -c 'git commit --no-verify -a \
+		            -m pre-whitespace-killed && \
+		        echo pre-whitespace ref: $(git resolve-ref HEAD) && \
+		        git reset HEAD^ && \
+		        file=$(mktemp) && \
+		        git diff --ignore-space-at-eol > $file && \
+		        git reset --hard HEAD && \
+		        git apply $file; \
+		        rm $file'"
+[http]
+	cookiefile = /home/jt/.gitcookies
