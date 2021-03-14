@@ -226,13 +226,7 @@ def postAnalysis(data):
                 value=percent, request_id=cur_time))
 
 
-def runLoop(path):
-    data = Data(path)
-    if platform.system() == "Linux":
-        frontend = ZenityFrontend()
-    else:
-        frontend = TkinterFrontend()
-
+def runLoop(data, frontend):
     while True:
         set_title("sleeping")
         time_to_sleep = max(random.expovariate(1.0 / GAP), 1.0)
@@ -262,13 +256,17 @@ def runLoop(path):
         if not valid:
             continue
         # okay go for it
+        observe(data, frontend)
+
+
+def observe(data, frontend):
         timestamp = now()
         for tag in frontend.askForTags(data.savedTags()):
             data.observe(timestamp, tag)
         postAnalysis(data)
 
-def analyze(db_path):
-    data = Data(db_path)
+
+def analyze(data):
     since_timestamp = now() - (ANALYSIS_DAYS * 24 * 60 * 60 * 1000000)
     total = float(data.totalObservationCount(since_timestamp=since_timestamp))
     results = []
@@ -283,20 +281,30 @@ def analyze(db_path):
 def main():
     try:
         mode = sys.argv[1]
-        if mode not in ("observe", "analyze"):
+        if mode not in ("observe", "analyze", "sample"):
             raise Exception("bad mode")
         db_path = sys.argv[2]
     except Exception:
         print "Usage: %s <observe/analyze> <database.sqlite>" % sys.argv[0]
         sys.exit(1)
 
+    if platform.system() == "Linux":
+        frontend = ZenityFrontend()
+    else:
+        frontend = TkinterFrontend()
+
+    data = Data(db_path)
+
     if mode == "observe":
         set_base_title(" ".join(sys.argv))
         set_title("starting")
-        return runLoop(db_path)
+        return runLoop(data, frontend)
 
     elif mode == "analyze":
-        return analyze(db_path)
+        return analyze(data)
+
+    elif mode == "sample":
+        return observe(data, frontend)
 
 
 if __name__ == "__main__":
