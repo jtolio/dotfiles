@@ -17,7 +17,7 @@ def git_ref_field(git_dir, ref, field, _cache={}):
   if key in _cache:
     return _cache[key]
   result = check_output(
-      ["git", "log", "-1", "--format=%s" % field, ref], cwd=git_dir)
+      ["git", "log", "-1", "--format=%s" % field, ref], cwd=git_dir).decode("utf8")
   _cache[key] = result
   return result
 
@@ -46,14 +46,19 @@ def git_change_id(git_dir, ref):
       continue
     if line.startswith("Change-Id: "):
       if change_id is not None:
-        warn("Commit %s has two change ids, choosing last" % ref[:8])
-      _, change_id = line.split()
+        warn("Commit %s has two change ids, using metahash" % ref[:8])
+        change_id = git_metahash(git_dir, ref)
+      else:
+        _, change_id = line.split()
+  if change_id is None:
+    warn("Commit %s has no change id, using metahash" % ref[:8])
+    change_id = git_metahash(git_dir, ref)
   return change_id
 
 
 def git_metahash(git_dir, ref):
   meta = git_ref_field(git_dir, ref, "%b:%an:%ae:%at:%s")
-  return hashlib.sha256(meta).hexdigest()
+  return hashlib.sha256(meta.encode("utf8")).hexdigest()
 
 
 def shortest_path(git_dir, child, tree_hash):
@@ -116,13 +121,13 @@ def print_filtered(git_dir, from_ref, to_ref, filter_cherry_picks=None,
       change_id = filter_cherry_picks(git_dir, ref)
     return (ref, git_subject(git_dir, ref), change_id)
 
-  from_refs = map(info, from_refs)
-  to_refs = map(info, to_refs)
+  from_refs = list(map(info, from_refs))
+  to_refs = list(map(info, to_refs))
   both = set()
   if filter_cherry_picks is not None:
     from_change_ids = Counter([change_id for _, _, change_id in from_refs])
     to_change_ids = Counter([change_id for _, _, change_id in to_refs])
-    for change_id, counter in from_change_ids.items() + to_change_ids.items():
+    for change_id, counter in list(from_change_ids.items()) + list(to_change_ids.items()):
       if counter > 1:
         warn("Change id %s applied on branch twice" % change_id)
     both = set(from_change_ids.keys()) & set(to_change_ids.keys())
@@ -135,14 +140,14 @@ def print_filtered(git_dir, from_ref, to_ref, filter_cherry_picks=None,
 
   for ref, subject, change_id in from_refs:
     if change_id not in both:
-      print "[- %s]%s %s" % (ref[:8], merge_msg(ref), subject)
+      print("[- %s]%s %s" % (ref[:8], merge_msg(ref), subject))
   for ref, subject, change_id in to_refs:
     if change_id not in both:
-      print "[+ %s]%s %s" % (ref[:8], merge_msg(ref), subject)
+      print("[+ %s]%s %s" % (ref[:8], merge_msg(ref), subject))
 
 
 def prefix_changed(git_dir, prefix, ref):
-  files = check_output(["git", "diff", "%s^" % ref, ref, "--name-only"])
+  files = check_output(["git", "diff", "%s^" % ref, ref, "--name-only"]).decode("utf8")
   files = files.strip().split()
   for fname in files:
     if fname.startswith(prefix):
